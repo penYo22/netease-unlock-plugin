@@ -8,7 +8,17 @@ const EAPI = "https://interfacepc.music.163.com";
 // Protocol key shared by the upstream client, not a user's credential.
 const EAPI_KEY = "e82ckenh8dichen8";
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
-const EAPI_UA = "NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)";
+// Keep the HTTP User-Agent paired with the Windows desktop EAPI header and
+// interfacepc host to avoid NetEase -460 risk-control rejections on playback.
+const EAPI_CLIENT = {
+  osver: "Microsoft-Windows-10-Professional-build-19045-64bit",
+  os: "pc",
+  appver: "3.1.17.204416",
+  versioncode: "140",
+  resolution: "1920x1080",
+  channel: "netease",
+};
+const EAPI_UA = `Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Safari/537.36 Chrome/91.0.4472.164 NeteaseMusicDesktop/${EAPI_CLIENT.appver}`;
 const PAGE_SIZE = 30;
 const PLAYLIST_LIMIT = 1000;
 const PRIVATE_RADAR = "3136952023";
@@ -219,12 +229,13 @@ async function request(path, params = {}, options = {}) {
   if (options.eapi) {
     const now = Date.now();
     const header = {
-      osver: "Microsoft-Windows-10-Professional-build-19045-64bit",
-      deviceId: deviceID(), os: "pc", appver: "3.1.17.204416",
-      versioncode: "140", mobilename: "", buildver: String(Math.floor(now / 1000)),
-      resolution: "1920x1080", channel: "netease",
+      ...EAPI_CLIENT,
+      deviceId: deviceID(),
+      mobilename: "",
+      buildver: String(Math.floor(now / 1000)),
       requestId: `${now}_${String(Math.floor(Math.random() * 1000)).padStart(4, "0")}`,
-      __csrf: "", ...activeSession.cookies,
+      __csrf: "",
+      ...activeSession.cookies,
     };
     const text = JSON.stringify({ ...params, header, e_r: false });
     const digest = host.crypto.md5(`nobody${path}use${text}md5forencrypt`);

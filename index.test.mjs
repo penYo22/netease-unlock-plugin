@@ -845,3 +845,24 @@ test("concurrent stream failures are shared and a later request starts fresh", a
   assert.ok((await plugin.stream({id:'1'})).url);
   assert.equal(calls,2);
 });
+
+test("eapi requests pair the desktop User-Agent with the PC payload and host", async () => {
+  let seenUrl = "";
+  let seenHeaders = {};
+  let seenPayload = null;
+  const { plugin } = await setup(async (url, init) => {
+    seenUrl = url;
+    seenHeaders = init.headers;
+    seenPayload = decode(init.body);
+    return response({
+      code: 200,
+      data: [{ id: 1, code: 200, url: "https://m1.music.126.net/song.mp3", type: "mp3", level: "exhigh" }],
+    });
+  });
+  await plugin.stream({ id: "1" });
+  assert.ok(seenUrl.startsWith("https://interfacepc.music.163.com/eapi/"));
+  assert.equal(seenPayload.data.header.os, "pc");
+  assert.ok(seenHeaders["User-Agent"].includes("Windows NT 10.0"));
+  assert.ok(seenHeaders["User-Agent"].includes(`NeteaseMusicDesktop/${seenPayload.data.header.appver}`));
+  assert.ok(!seenHeaders["User-Agent"].includes("iPhone"));
+});
