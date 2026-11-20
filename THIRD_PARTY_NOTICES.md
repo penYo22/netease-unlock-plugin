@@ -2,6 +2,14 @@
 
 This plugin is licensed under AGPL-3.0-only. The complete license is in `LICENSE`.
 
+**Acknowledgement.** This project is a derivative of
+[sogud/mygo-music-netease](https://github.com/sogud/mygo-music-netease), itself a
+continuation of [egoist/mygo-cloudmusic](https://github.com/egoist/mygo-cloudmusic).
+The NetEase API protocol, authentication, playlist/podcast/comment features and
+much of the JavaScript port are the work of egoist, sogud and their contributors.
+This repository adds only member-track unblocking and a handful of settings on top.
+Our thanks to the original authors for releasing this under the AGPL-3.0.
+
 The NetEase API protocol and data mappings are adapted from:
 
 - Repository: https://github.com/sogud/mygo-cloudmusic

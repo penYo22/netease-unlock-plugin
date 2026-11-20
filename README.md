@@ -1,5 +1,10 @@
 # 网易云音乐api · MyGo Music 融合插件
 
+> **致谢**：本插件基于 [sogud/mygo-music-netease](https://github.com/sogud/mygo-music-netease)
+> 开发，它又源自 [egoist/mygo-cloudmusic](https://github.com/egoist/mygo-cloudmusic)。
+> 网易云 API 协议、账号登录、歌单/播客/评论等核心能力都来自这两位作者及其贡献者的辛勤工作；
+> 本仓库只在其基础上增加了会员曲解灰与若干设置项。感谢 egoist 和 sogud 的开源与维护。
+
 基于 [sogud/mygo-music-netease](https://github.com/sogud/mygo-music-netease)（AGPL-3.0）
 的**融合版**：在它的全部功能基础上，加入了**会员曲解灰**能力。一个插件、一个音源，
 `id=netease`，打开即用，不依赖任何独立后端进程。
