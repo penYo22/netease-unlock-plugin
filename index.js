@@ -488,10 +488,10 @@ async function requireAccount() {
   return profile;
 }
 
-// Not exported: MyGo shows a red "Sign In" button for every source exporting
-// signIn, which this plugin does not need. Cookie-based accounts still work
-// through NETEASE_COOKIE, so account() can answer without a login flow.
-async function signIn() {
+// Exported so MyGo shows its sign-in button and can run the QR flow. Pages that
+// need an account still never pop this dialog on their own: requireAccount()
+// answers with a hint instead, and the listener chooses when to sign in.
+export async function signIn() {
   const startedEpoch = ++epoch;
   const pending = { cookies: {}, profile: null };
   host.signInPrompt({ text: "正在生成网易云音乐登录二维码…" });
@@ -529,7 +529,7 @@ async function signIn() {
   throw new Error("登录已取消或超时，请重新点击登录");
 }
 
-function signOut() {
+export function signOut() {
   // Forget this plugin's session. Do not affect other NetEase clients.
   clearSession();
 }

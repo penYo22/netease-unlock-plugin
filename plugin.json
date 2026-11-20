@@ -1,12 +1,14 @@
 {
   "id": "netease",
   "name": "网易云音乐api",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "minAppVersion": "0.1.21",
   "main": "index.js",
   "playback": "stream",
   "permissions": {
-    "network": ["*"]
+    "network": [
+      "*"
+    ]
   },
   "settings": [
     {
@@ -58,10 +60,26 @@
     }
   ],
   "navigation": [
-    { "title": "发现音乐", "builtin": "home" },
-    { "title": "私人漫游", "builtin": "stations" },
-    { "title": "排行榜", "page": "charts", "icon": "chart" },
-    { "title": "我喜欢的音乐", "builtin": "liked" },
-    { "title": "我的播客", "builtin": "shows" }
+    {
+      "title": "发现音乐",
+      "builtin": "home"
+    },
+    {
+      "title": "私人漫游",
+      "builtin": "stations"
+    },
+    {
+      "title": "排行榜",
+      "page": "charts",
+      "icon": "chart"
+    },
+    {
+      "title": "我喜欢的音乐",
+      "builtin": "liked"
+    },
+    {
+      "title": "我的播客",
+      "builtin": "shows"
+    }
   ]
 }
