@@ -27,8 +27,86 @@ let heartState = null;
 let pendingHeart = null;
 let commentSnapshot = null;
 
+// The upstream api-enhanced service keeps these in environment variables.
+// MyGo's plugin settings are plain text fields, so the listener gets the same
+// switches here. Every field is optional: left empty, it keeps the default
+// below, which is the install-and-it-works behaviour.
+let settingsCache = null;
+
+function setting(key) {
+  try { return String(host.setting(key) || "").trim(); }
+  catch (error) { return ""; }
+}
+
+function enabled(key, fallback) {
+  const value = setting(key).toLowerCase();
+  if (!value) return fallback;
+  return ["1", "true", "yes", "on", "开", "开启"].includes(value);
+}
+
+function options() {
+  if (settingsCache) return settingsCache;
+  const mode = setting("UNBLOCK").toLowerCase();
+  // This is a free-text box, and people naturally type true/false into a
+  // switch. Accept those as always/off instead of silently falling back to
+  // auto, which would make the switch they set look like it did nothing.
+  const unblock = ["auto", "always", "off"].includes(mode) ? mode
+    : ["1", "true", "yes", "on", "开", "开启"].includes(mode) ? "always"
+    : ["0", "false", "no", "关", "关闭"].includes(mode) ? "off"
+    : "auto";
+  settingsCache = {
+    unblock,
+    matchURL: setting("MATCH_API_URL")
+      || "https://music-api.gdstudio.xyz/api.php?types=url&source=netease&id={id}&br={br}",
+    flac: enabled("ENABLE_FLAC", true),
+    maxBr: enabled("SELECT_MAX_BR", false),
+    strictOrder: enabled("FOLLOW_SOURCE_ORDER", true),
+    proxy: enabled("ENABLE_PROXY", false),
+    proxyURL: setting("PROXY_URL"),
+    randomCNIP: enabled("ENABLE_RANDOM_CN_IP", false),
+    cookie: setting("NETEASE_COOKIE"),
+  };
+  return settingsCache;
+}
+
+// A setting is read when a song plays, so one already playing keeps what it
+// started with; forgetting the cache makes the next song use the new values.
+export function setSetting({ key }) {
+  settingsCache = null;
+  if (key === "NETEASE_COOKIE") session = null;
+}
+
+function customCookies() {
+  const raw = options().cookie;
+  if (!raw) return null;
+  const cookies = {};
+  for (const pair of raw.split(/[;,]\s*/)) {
+    const at = pair.indexOf("=");
+    if (at < 1) continue;
+    const name = pair.slice(0, at).trim();
+    const value = pair.slice(at + 1).trim();
+    if (COOKIE_NAMES.includes(name) && value) cookies[name] = value;
+  }
+  return cookies.MUSIC_U ? cookies : null;
+}
+
+function cnIPHeaders() {
+  if (!options().randomCNIP) return {};
+  // Ranges belonging to mainland carriers. The point is only that a forwarded
+  // address looks local to NetEase, not that any particular one is real.
+  const blocks = ["36.", "58.", "61.", "112.", "116.", "117.", "120.", "121.", "123.", "124.", "182.", "183.", "218.", "221.", "222."];
+  const ip = blocks[Math.floor(Math.random() * blocks.length)]
+    + (1 + Math.floor(Math.random() * 254)) + "."
+    + (1 + Math.floor(Math.random() * 254));
+  return { "X-Forwarded-For": ip, "X-Real-IP": ip };
+}
+
 function currentSession() {
   if (!session) session = host.storage.get("session") || { cookies: {}, profile: null };
+  const custom = customCookies();
+  if (custom && session.cookies.MUSIC_U !== custom.MUSIC_U) {
+    session = { ...session, cookies: { ...session.cookies, ...custom } };
+  }
   return session;
 }
 
@@ -136,7 +214,7 @@ async function request(path, params = {}, options = {}) {
   const activeSession = options.session || currentSession();
   const startedEpoch = epoch;
   let url;
-  const headers = { "User-Agent": UA, Referer: `${SITE}/` };
+  const headers = { "User-Agent": UA, Referer: `${SITE}/`, ...cnIPHeaders() };
   const init = { headers, redirect: "error" };
   if (options.eapi) {
     const now = Date.now();
@@ -232,13 +310,17 @@ function toAlbum(album = {}) {
 }
 
 function toTrack(track) {
-  const privilege = track.privilege;
   return {
     id: String(track.id), name: track.name || "",
     artists: (track.ar || track.artists || []).map(toArtist),
     album: toAlbum(track.al || track.album), duration: track.dt || track.duration || 0,
     url: `${SITE}/song?id=${track.id}`,
-    unavailable: privilege ? privilege.st < 0 || privilege.pl <= 0 : track.fee === 1 || track.fee === 4,
+    // A track's privilege only says this account may not have it; the file may
+    // still be reachable through the matching service in stream(). The app
+    // refuses to even open a row whose Unavailable is set, so leaving this on
+    // would grey out songs that now play. A song nobody can supply still fails
+    // in stream(), with a reason, which is the honest place to say so.
+    unavailable: false,
   };
 }
 
@@ -347,13 +429,58 @@ export async function account() {
   }
 }
 
+// A page that needs an account says so in place, as an empty section, rather
+// than throwing: MyGo turns any thrown error into a whole-page "failed to
+// load" with a Retry button, which hides everything else that does work.
+const LOAD_HINT = "暂时没能加载，点「重试」再来一次；其他入口不受影响。";
+
+// Pages that normally need an account still show something worth clicking.
+// Public charts and recommended playlists answer without a login, and every
+// track they return is playable through the unblock path in stream().
+async function publicTracks(limit = 30) {
+  const charts = await request("/api/toplist/detail");
+  const first = (charts.list || [])[0];
+  if (!first) return [];
+  const detail = await request("/api/v6/playlist/detail", { id: first.id, n: limit });
+  const pl = detail.playlist;
+  const ids = (pl?.trackIds || pl?.tracks || []).slice(0, limit).map((t) => t.id);
+  return (await songDetails(ids, pl?.tracks || [])).map(toTrack);
+}
+
+async function anonymousSection(title, subtitle) {
+  try {
+    const tracks = await publicTracks();
+    if (tracks.length) return { title, subtitle, sections: [{ tracks }] };
+  } catch (error) {
+    // A public chart is a convenience, never a reason to fail the page.
+  }
+  return { title, sections: [{ empty: LOAD_HINT }] };
+}
+
+async function anonymousPlaylists(title, subtitle) {
+  try {
+    const playlists = await discoveryPlaylists();
+    if (playlists.length) return { title, subtitle, sections: [{ playlists }] };
+  } catch (error) {
+    // Same as above: fall back to an empty state rather than an error page.
+  }
+  return { title, sections: [{ empty: LOAD_HINT }] };
+}
+
 async function requireAccount() {
   const profile = await account();
-  if (!profile) throw fail("signIn", "请先扫码登录网易云音乐");
+  // This plugin installs without a login. Personal pages still need an
+  // account, but asking for one must not pop up a sign-in dialog over a
+  // player that otherwise works. Listeners who want those pages can put a
+  // MUSIC_U cookie in the NETEASE_COOKIE setting instead.
+  if (!profile) throw fail("unavailable", "这个操作需要网易云账号，可在插件设置里填 NETEASE_COOKIE");
   return profile;
 }
 
-export async function signIn() {
+// Not exported: MyGo shows a red "Sign In" button for every source exporting
+// signIn, which this plugin does not need. Cookie-based accounts still work
+// through NETEASE_COOKIE, so account() can answer without a login flow.
+async function signIn() {
   const startedEpoch = ++epoch;
   const pending = { cookies: {}, profile: null };
   host.signInPrompt({ text: "正在生成网易云音乐登录二维码…" });
@@ -391,7 +518,7 @@ export async function signIn() {
   throw new Error("登录已取消或超时，请重新点击登录");
 }
 
-export function signOut() {
+function signOut() {
   // Forget this plugin's session. Do not affect other NetEase clients.
   clearSession();
 }
@@ -430,9 +557,8 @@ async function discoverySection() {
   try {
     return { title: "推荐歌单", playlists: await discoveryPlaylists() };
   } catch (error) {
-    // Authentication failures still reach the host's sign-in flow. Optional
-    // recommendations and cover art must not hide the navigation or radio.
-    if (error.code === "signIn") throw error;
+    // Optional recommendations and cover art must never take the whole Home
+    // page down, including when NetEase answers that it wants an account.
     return {
       title: "推荐歌单", empty: "推荐歌单暂时无法加载，点击「查看全部」重试；其他入口仍可使用。",
       morePage: "discovery",
@@ -441,7 +567,11 @@ async function discoverySection() {
 }
 
 export async function home() {
-  const recommendations = await discoverySection();
+  // Home must never become a whole-page error: navigation, radio and search
+  // all stay usable even if a decorative section cannot be fetched.
+  const recommendations = await discoverySection().catch(() => ({
+    title: "推荐歌单", empty: "推荐歌单暂时无法加载，点「查看全部」重试；其他入口仍可使用。", morePage: "discovery",
+  }));
   return {
     title: "发现音乐", subtitle: "网易云音乐 · 发现喜欢的音乐",
     sections: [
@@ -490,19 +620,19 @@ export async function browse({ page }) {
   }
   if (page === "radar") {
     // NetEase's dynamic playlist is selected for the signed-in listener.
-    // Never label its anonymous response as someone's personal radar.
-    await requireAccount();
+    // Never label an anonymous chart as someone's personal radar.
+    if (!(await account())) return anonymousSection("随便听听", "没登录也能放 · 从公开榜单挑的歌");
     const radar = await playlist({ id: PRIVATE_RADAR });
     return { title: "私人雷达", subtitle: radar.name, sections: [{ tracks: radar.tracks }] };
   }
   if (page === "daily") {
-    await requireAccount();
+    if (!(await account())) return anonymousSection("每日推荐", "没登录也能放 · 今天的公开榜单好歌");
     const data = await request("/api/v3/discovery/recommend/songs");
     const songs = data.data?.dailySongs || [];
     return { title: "每日推荐", sections: [{ tracks: (await songDetails(songs.map(song => song.id), songs)).map(toTrack) }] };
   }
   if (page === "recommendations") {
-    await requireAccount();
+    if (!(await account())) return anonymousPlaylists("个性化歌单", "没登录也能看 · 公开推荐歌单");
     const data = await request("/api/v1/discovery/recommend/resource");
     return { title: "个性化歌单", sections: [{ playlists: (data.recommend || []).map(toPlaylist) }] };
   }
@@ -559,7 +689,7 @@ async function completeShowPrefix(previousSize, limit) {
 }
 
 export async function shows() {
-  await requireAccount();
+  if (!(await account())) return [];
   const result = new Map();
   let duplicatePages = 0;
   for (let offset = 0; offset < 2000;) {
@@ -647,6 +777,7 @@ async function likedIDs() {
 
 export async function liked({ offset = 0 }) {
   offset = pageOffset(offset);
+  if (!(await account())) return { tracks: [], more: false };
   const ids = await likedIDs();
   return { tracks: (await songDetails(ids.slice(offset, offset + PAGE_SIZE))).map(toTrack), more: offset + PAGE_SIZE < ids.length };
 }
@@ -825,8 +956,6 @@ function parseYRC(text) {
   return lines;
 }
 
-// A word-timed translation arrives as plain timed lines of its own; the one
-// nearest to a line's start, within half a second, is that line's translation.
 function alignTranslations(lines, timed) {
   const byTime = [];
   for (const row of String(timed || "").split(/\r?\n/)) {
@@ -855,6 +984,13 @@ function lyricAnswer(desktop, translation) {
   return { lines: alignTranslations(lines, desktop.ytlrc?.lyric || translation), lrc, translation };
 }
 
+
+
+// Lyrics, word by word where NetEase times them, and by the line otherwise.
+// The desktop endpoint is the only one that carries YRC, and only to a signed
+// in listener, so it is asked first when there is a session; the web endpoint
+// answers LRC for everyone else, which the app spreads over the line itself.
+// Nothing is fetched from outside NetEase: no lyric library, no second host.
 export async function lyrics({ id }) {
   const identity = trackIdentity(id);
   if (identity.program) return { lrc: "", translation: "" };
@@ -911,8 +1047,45 @@ export async function stream({ id, quality = "high" }) {
   finally { if (pendingStreams.get(key) === pending) pendingStreams.delete(key); }
 }
 
+// loadStream is what a song plays as. The account's own quality is asked for
+// first. When NetEase refuses it — no VIP, a quality this account doesn't own,
+// a request turned away for being too fast — the song is looked up by its id
+// at a public matching service, then at the web player's own redirect. Neither
+// needs anything installed or configured; they are plain HTTPS reads.
 async function loadStream(id, quality, generation) {
   const level = { standard: "standard", high: "exhigh", lossless: "lossless" }[quality] || "exhigh";
+  const opt = options();
+  // "always" is ENABLE_GENERAL_UNBLOCK: every song tries the matching service
+  // first, and the account's own address is only a fallback. Turning off
+  // FOLLOW_SOURCE_ORDER does the same for songs that would otherwise be asked
+  // of NetEase first. With "off", gdStream answers null either time.
+  if (opt.unblock === "always" || (opt.unblock === "auto" && !opt.strictOrder)) {
+    const first = await gdStream(id, quality);
+    if (first) return first;
+  }
+  try {
+    return await neteaseStream(id, level, generation);
+  } catch (error) {
+    // A request from an account that changed under it is nobody's to retry.
+    // An expired session is the listener's to fix only when unblocking is
+    // off: the matching service needs no login, so it can still play the song.
+    if (generation !== epoch) throw error;
+    if (error.code === "signIn" && opt.unblock === "off") throw error;
+    const matched = await gdStream(id, quality);
+    if (matched) return matched;
+    const plain = await outerStream(id);
+    if (plain) return plain;
+    // All three ways came back empty. The song has no reachable file right
+    // now, which includes a matching service that is down for the moment.
+    if (error.neteaseCode === 460 || error.neteaseCode === -460 || error.code === "unavailable") {
+      throw fail("unavailable", "这首歌暂时找不到可用音源（可能是下架曲目或解灰服务未响应），稍后再试");
+    }
+    throw error;
+  }
+}
+
+// neteaseStream is what a song plays as from NetEase alone, as it always was.
+async function neteaseStream(id, level, generation) {
   let data;
   for (let attempt = 0; attempt < 2; attempt++) {
     if (generation !== epoch) throw new Error("账号状态已改变，请重试");
@@ -935,7 +1108,11 @@ async function loadStream(id, quality, generation) {
     }
   }
   const audio = (data.data || []).find((item) => String(item.id) === id);
-  if (!audio || !audio.url || (audio.code !== undefined && audio.code !== 200) || audio.freeTrialInfo != null) {
+  // A preview is an object; api-enhanced writes the string "null" where there
+  // is none, so both spellings of "no preview" have to be accepted.
+  const trial = audio && audio.freeTrialInfo;
+  const preview = trial !== undefined && trial !== null && String(trial) !== "null";
+  if (!audio || !audio.url || (audio.code !== undefined && audio.code !== 200) || preview) {
     throw fail("unavailable", "当前账号无完整播放权限，或歌曲在当前地区不可用");
   }
   const url = new URL(secureURL(audio.url));
@@ -944,13 +1121,144 @@ async function loadStream(id, quality, generation) {
   }
   const type = String(audio.type || "mp3").toLowerCase();
   if (!["mp3", "flac", "ogg", "m4a", "mp4", "aac"].includes(type)) throw fail("unavailable", "该歌曲的音频格式暂不支持");
+  // The type the API names is not always what the file is: a track this
+  // account may not play comes back as an encrypted .mgg while still being
+  // called "flac". The player can only decode the plain formats, so the
+  // file's own extension has the last word; a rejected file falls through
+  // to the matching service, which serves a plain one.
+  const ext = url.pathname.slice(url.pathname.lastIndexOf(".") + 1).toLowerCase();
+  if (ext && !["mp3", "flac", "ogg", "m4a", "mp4", "aac"].includes(ext)) throw fail("unavailable", "该歌曲的音频格式暂不支持");
   return {
-    url: url.toString(), type, size: audio.size || 0, bitRate: audio.br || 0,
+    url: url.toString(), type, size: audio.size || 0,
+    // The API answers in bits/s here while the matching service answers in
+    // kbps; the app shows this number as kbps.
+    bitRate: audio.br > 1000 ? Math.round(audio.br / 1000) : (audio.br || 0),
     quality: ["lossless", "hires"].includes(audio.level) ? "lossless" : audio.level === "standard" ? "standard" : "high",
     gain: audio.gain || 0, peak: audio.peak || 0,
     headers: { "User-Agent": UA, Referer: `${SITE}/` },
   };
 }
+
+// gdStream asks a matching service for a file for this NetEase id. It is the
+// same source the api-enhanced unblock utilities use for their third-party
+// NetEase lookup, reachable as one GET with no account and no cookie. Which
+// service, whether to ask at all, and what quality to ask for are the
+// listener's settings; with every field empty this is the built-in default.
+function matchBitrate(quality, opt) {
+  if (opt.maxBr) return opt.flac ? 740 : 320;
+  if (quality === "lossless") return opt.flac ? 740 : 320;
+  if (quality === "standard") return 128;
+  return 320;
+}
+
+function neteaseCDN(hostname) {
+  return /^(?:[a-z0-9-]+\.)*music\.126\.net$/i.test(hostname);
+}
+
+async function gdStream(id, quality) {
+  const opt = options();
+  if (opt.unblock === "off") return null;
+  const address = opt.matchURL
+    .replace(/\{id\}/g, encodeURIComponent(id))
+    .replace(/\{br\}/g, String(matchBitrate(quality, opt)));
+  const headers = { "User-Agent": UA, Accept: "application/json", ...cnIPHeaders() };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(address, { signal: controller.signal, headers });
+    if (!response.ok) return null;
+    const data = await response.json();
+    // GD answers {url,br,size}; api-enhanced's /song/url/match answers
+    // {data:"..."} and /song/url/v1 answers {data:[{url}]}.
+    const raw = (data && typeof data.url === "string") ? data.url
+      : (data && typeof data.data === "string") ? data.data
+      : (data && data.data && typeof data.data.url === "string") ? data.data.url
+      : (data && Array.isArray(data.data) && data.data[0] && typeof data.data[0].url === "string") ? data.data[0].url
+      : "";
+    if (!raw) return null;
+    const found = new URL(secureURL(raw));
+    if (found.protocol !== "https:" && found.protocol !== "http:") return null;
+    // A matching service may only point at NetEase's own CDN. With a proxy
+    // the listener has named, that proxy is where the player goes instead.
+    if (!opt.proxy && !neteaseCDN(found.hostname)) return null;
+    let audio = found;
+    if (opt.proxy && opt.proxyURL) {
+      audio = new URL(opt.proxyURL + encodeURIComponent(found.toString()));
+      if (audio.protocol !== "https:" && audio.protocol !== "http:") return null;
+    }
+    // The file's own extension says what it is. A flac answer to a 320k ask
+    // would otherwise be decoded as an mp3, so this is not taken on trust.
+    const dot = found.pathname.lastIndexOf(".");
+    const type = dot >= 0 ? found.pathname.slice(dot + 1).toLowerCase() : "";
+    if (!["mp3", "flac", "ogg", "m4a", "mp4", "aac"].includes(type)) return null;
+    const info = data && data.data && !Array.isArray(data.data) ? data.data : data;
+    const size = Number(info.size) || 0;
+    // The matching service answers in kbps already: a lossless 1671 is
+    // 1671 kbps, and dividing it would show "2k" in the player.
+    const br = Number(info.br) || 0;
+    return {
+      url: audio.toString(), type, size,
+      bitRate: br,
+      quality: type === "flac" ? "lossless" : quality === "standard" ? "standard" : "high",
+      gain: 0, peak: 0,
+      headers: { "User-Agent": UA, Referer: `${SITE}/`, ...cnIPHeaders() },
+    };
+  } catch (error) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// outerStream is the song's own file as the web player hands it out: a link
+// that redirects to the audio at standard quality. It answers for a song the
+// account may play but the API refused — a quality it doesn't own, a request
+// turned away for being too fast — and for one it may not: a song with no
+// rights left lands on /404, which is not a song, and null is the answer.
+async function outerStream(id) {
+  const address = `${SITE}/song/media/outer/url?id=${encodeURIComponent(id)}.mp3`;
+  const headers = { "User-Agent": UA, Referer: `${SITE}/` };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    let target = "";
+    try {
+      // Where the redirect points is all this asks: the file itself is the
+      // player's to fetch, and fetching it here would be the whole song.
+      const response = await fetch(address, { redirect: "manual", signal: controller.signal, headers });
+      target = (response.headers && response.headers.get("location")) || "";
+    } catch (error) {
+      target = "";
+    }
+    if (!target) {
+      // A fetch that follows the redirect says where it landed instead.
+      const response = await fetch(address, { redirect: "follow", signal: controller.signal, headers });
+      target = response.url || "";
+    }
+    if (!target) return null;
+    const url = new URL(secureURL(target));
+    if (url.protocol !== "https:" || !/^(?:[a-z0-9-]+\.)*music\.126\.net$/i.test(url.hostname)) return null;
+    if (/^\/404(?:\/|$)/.test(url.pathname)) return null;
+    // How long the song is, asked for and not read: the app draws its place in
+    // a song from this, and a link alone doesn't say.
+    let size = 0;
+    try {
+      const head = await fetch(url.toString(), { method: "HEAD", signal: controller.signal, headers });
+      if (head.ok) size = Number(head.headers.get("content-length")) || 0;
+    } catch (error) {
+      size = 0;
+    }
+    return {
+      url: url.toString(), type: "mp3", size, bitRate: 0, quality: "standard",
+      gain: 0, peak: 0, headers,
+    };
+  } catch (error) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 
 // The host asks stationNext again as the queue runs out. These modes are
 // NetEase's own recommendations, not a shuffle of the current local list.
@@ -1072,10 +1380,25 @@ async function heartNext() {
   finally { if (pendingHeart === pending) pendingHeart = null; }
 }
 
+// Without an account the radio still has to return playable tracks: MyGo
+// retries a station that answers nothing and then gives up with a toast.
+let radioPool = null;
+async function anonymousRadio(id) {
+  if (!radioPool || Date.now() - radioPool.at > 5 * 60 * 1000) {
+    radioPool = { tracks: await publicTracks(60), at: Date.now() };
+  }
+  const pool = radioPool.tracks;
+  if (!pool.length) return [];
+  const offset = id === "EXPLORE" ? Math.floor(pool.length / 2) : 0;
+  const rotated = [...pool.slice(offset), ...pool.slice(0, offset)];
+  const start = Math.floor(Math.random() * Math.max(1, rotated.length - 3));
+  return rotated.slice(start, start + 3);
+}
+
 export async function stationNext({ id }) {
+  if (!["HEART", "DEFAULT", "FAMILIAR", "EXPLORE"].includes(id)) throw fail("unsupported", "没有这个漫游模式");
+  if (!(await account())) return anonymousRadio(id);
   if (id === "HEART") return heartNext();
-  if (!["DEFAULT", "FAMILIAR", "EXPLORE"].includes(id)) throw fail("unsupported", "没有这个漫游模式");
-  await requireAccount();
   const data = await eapi("/api/v1/radio/get", { mode: id, limit: 3 });
   const songs = data.data || [];
   if (songs.length === 0) {

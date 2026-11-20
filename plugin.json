@@ -1,13 +1,62 @@
 {
   "id": "netease",
-  "name": "网易云音乐",
-  "version": "0.1.13",
+  "name": "网易云音乐api",
+  "version": "0.7.0",
   "minAppVersion": "0.1.21",
   "main": "index.js",
   "playback": "stream",
   "permissions": {
-    "network": ["music.163.com", "interfacepc.music.163.com"]
+    "network": ["*"]
   },
+  "settings": [
+    {
+      "key": "UNBLOCK",
+      "label": "解灰模式 UNBLOCK",
+      "help": "留空 = auto（官方播不了才解灰，默认）。填 always = 每首歌都先解灰，等价于 ENABLE_GENERAL_UNBLOCK=true；填 off = 完全关闭解灰，只走网易云官方接口和外链。",
+      "link": "https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced/blob/main/.env.prod.example"
+    },
+    {
+      "key": "MATCH_API_URL",
+      "label": "解灰服务地址 MATCH_API_URL",
+      "help": "留空用内置公开服务。可填自己的 api-enhanced 或其它服务，支持 {id} 与 {br} 占位符，例如 http://127.0.0.1:3000/song/url/match?id={id} 。返回 {url:...} 或 {data:url} 或 {data:[{url:...}]} 都能识别。",
+      "link": "https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced"
+    },
+    {
+      "key": "ENABLE_FLAC",
+      "label": "启用无损 ENABLE_FLAC",
+      "help": "留空 = true。填 false 时最高只取 320k mp3；true 时「无损」音质会向解灰服务要 flac（br=740）。"
+    },
+    {
+      "key": "SELECT_MAX_BR",
+      "label": "总是最高音质 SELECT_MAX_BR",
+      "help": "留空 = false。填 true 后不理会应用的音质设置，一律向解灰服务要最高音质。"
+    },
+    {
+      "key": "FOLLOW_SOURCE_ORDER",
+      "label": "严格音源顺序 FOLLOW_SOURCE_ORDER",
+      "help": "留空 = true：官方 → 解灰 → 外链。填 false：解灰优先 → 官方 → 外链。"
+    },
+    {
+      "key": "ENABLE_PROXY",
+      "label": "启用代理 ENABLE_PROXY",
+      "help": "留空 = false。填 true 后，解灰拿到的音频地址会交给 PROXY_URL 转发。"
+    },
+    {
+      "key": "PROXY_URL",
+      "label": "代理地址 PROXY_URL",
+      "help": "例如 https://your-proxy.example/?proxy= 。仅当 ENABLE_PROXY=true 时生效，拼法：此前缀 + 编码后的原音频地址。"
+    },
+    {
+      "key": "ENABLE_RANDOM_CN_IP",
+      "label": "随机中国 IP ENABLE_RANDOM_CN_IP",
+      "help": "留空 = false。填 true 后给网易云请求加上随机中国 IP 的 X-Forwarded-For / X-Real-IP 头。"
+    },
+    {
+      "key": "NETEASE_COOKIE",
+      "label": "网易云 Cookie NETEASE_COOKIE",
+      "help": "格式 MUSIC_U=xxxxxxxx ，可再带 ; __csrf=... 。填了会员 Cookie 后官方接口会直接给出会员曲地址，不必走解灰。留空则用扫码登录的会话。此值只发给 music.163.com，绝不会发给解灰服务。"
+    }
+  ],
   "navigation": [
     { "title": "发现音乐", "builtin": "home" },
     { "title": "私人漫游", "builtin": "stations" },
