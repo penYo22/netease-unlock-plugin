@@ -1166,12 +1166,26 @@ function neteaseCDN(hostname) {
   return /^(?:[a-z0-9-]+\.)*music\.126\.net$/i.test(hostname);
 }
 
+// gdStream asks the matching service for a file, with two attempts. A lossless
+// ask is the slowest and largest answer, so when it misses a 320k mp3 is asked
+// for before giving up. Without this, one slow answer made the song play as
+// unavailable until the listener clicked it again.
 async function gdStream(id, quality) {
   const opt = options();
   if (opt.unblock === "off") return null;
+  const first = matchBitrate(quality, opt);
+  const tries = first === 740 ? [740, 320] : [first, first];
+  for (const br of tries) {
+    const found = await gdAttempt(id, br, quality, opt);
+    if (found) return found;
+  }
+  return null;
+}
+
+async function gdAttempt(id, askBr, quality, opt) {
   const address = opt.matchURL
     .replace(/\{id\}/g, encodeURIComponent(id))
-    .replace(/\{br\}/g, String(matchBitrate(quality, opt)));
+    .replace(/\{br\}/g, String(askBr));
   const headers = { "User-Agent": UA, Accept: "application/json", ...cnIPHeaders() };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
