@@ -28,7 +28,7 @@ git merge upstream/main
 
 - 无冲突 → 直接第 3 步。
 - 有冲突（历史上总是出在 `plugin.json` 的 name/version，偶尔在 `stream()`/`lyrics()`）：
-  - `plugin.json`：保留我们的 `name`（网易云音乐api）、`version`（我们的版本号），
+  - `plugin.json`：保留我们的 `name`（网易云音乐）、`version`（我们的版本号），
     丢弃上游的 0.1.x。
   - 解灰相关（`gdStream`/`matchBitrate`/`neteaseCDN`/`loadStream` 兜底顺序）→ 保留**我们的**。
   - 上游纯新增功能 → 采用**上游的**。

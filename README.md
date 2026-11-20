@@ -1,4 +1,4 @@
-# 网易云音乐api · MyGo Music 融合插件
+# 网易云音乐 · MyGo Music 融合插件
 
 > **致谢**：本插件基于 [sogud/mygo-music-netease](https://github.com/sogud/mygo-music-netease)
 > 开发，它又源自 [egoist/mygo-cloudmusic](https://github.com/egoist/mygo-cloudmusic)。
